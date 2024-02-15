@@ -1,0 +1,174 @@
+---
+title: "RFPOPI - training and predictions"
+output: html_notebook
+---
+
+```{r Libraries, message=FALSE, warning=FALSE}
+options(scipen = 100)
+#################################################################################
+#Packages upload
+#################################################################################
+packages<- c("tidyverse", "dplyr", "readr","haven","caret", "ggplot2", "ggExtra", "gridExtra","grid", "Boruta", "randomForest","MASS", "glmnet", "ranger", "reshape2", "ggpubr")
+lapply(packages, require, character.only = TRUE)
+```
+
+```{r}
+#################################################################################
+#Datasets
+#################################################################################
+mej_vdem<-readRDS("data/mej_vdem.rds")
+V_Dem2<- readRDS("data/V_Dem2.rds")
+
+#################################################################################
+#Selected variables from Variables' selection.Rmd
+#################################################################################
+#Inputs:
+select_IDE<- readRDS("data/select_IDE.rds")
+select_RHET_OECD<- readRDS("data/select_RHET_OECD.rds")
+select_RHET_noOECD<- readRDS("data/select_RHET_noOECD.rds")
+variables_IDE<-readRDS("data/variables_IDE.rds")
+variables_rhet_OECD<-readRDS("data/variables_rhet_OECD.rds")
+variables_rhet_noOECD<-readRDS("data/variables_rhet_noOECD.rds")
+```
+
+<h> Training and optimizing the Ideational RFPOPI </h2>
+
+```{r}
+#Train test split
+set.seed(1)
+idx<-  as.vector(createDataPartition(select_IDE$depvar, p = .7,list=FALSE , times = 1)) #This ensures balance in train test set by levels of populism 
+train<- select_IDE[idx,]
+test<- select_IDE[-idx,]
+train<- train%>%
+        dplyr::select(depvar,variables_IDE)
+test<-  test%>%
+        dplyr::select(depvar,variables_IDE)
+
+#Random Forest tuning
+set.seed(8)
+#Leave one out cross validation
+ctrl <- trainControl(method = "LOOCV")
+# Define a grid of parameters to search
+grid <- expand.grid(
+  .mtry = c(2:ncol(train)-1)) #Number of variables randomly sampled as candidates at each split
+
+# Train the Random Forest model with grid search
+m.rf <- train(
+  depvar ~ ., 
+  data=train, 
+  method="rf", 
+  metric="RMSE", 
+  tuneGrid=grid, 
+  ntree = 500,
+  trControl=ctrl)
+#Optimized model in ranger environment: allows for easy calculation of confidence intervals of estimates
+mod_fin_ide <- ranger(
+  depvar~., 
+  data            = train, 
+  num.trees       = 1000,
+  mtry            = m.rf$bestTune[[1]],
+  importance      = "permutation",
+  keep.inbag = TRUE)  
+```
+
+<h4> Ideational RFPOPI predictions <h4>
+```{r}
+#select 
+subs<-V_Dem2[,c("v2paid","country_name", "country_text_id","year",noquote(variables_IDE))]
+subs<-na.omit(subs)
+#################################################################################
+#Predictions and confidence intervals
+#################################################################################
+predictions<-predict(mod_fin_ide, subs, type="se")
+subs$populism_ide<- predictions$predictions
+ERR_ide<- predictions$se*1.96
+subs$pop_ide_err_L<-predictions$predictions-ERR_ide
+subs$pop_ide_err_H<-predictions$predictions+ERR_ide
+```
+
+<h4> Training and optimizing the Rhetoric RFPOPI (Western countries) </h4>
+```{r}
+set.seed(1)
+idx<-  as.vector(createDataPartition(select_RHET_OECD$depvar, p = .7,list=FALSE , times = 1)) #This ensures balance in train test set by levels of populism and political ideology
+train<- select_RHET_OECD[idx,]
+test<- select_RHET_OECD[-idx,]
+ctrl <- trainControl(method = "LOOCV")
+
+# Train the Random Forest model with grid search
+m.rf <- train(
+  depvar ~ ., 
+  data=train, 
+  method="rf", 
+  metric="RMSE", 
+  tuneGrid=grid, 
+  ntree = 500,
+  trControl=ctrl)
+#Optimized model in ranger environment: allows for easy calculation of confidence intervals of estimates
+mod_fin_rhet_oecd <- ranger(
+  depvar~., 
+  data            = train, 
+  num.trees       = 1000,
+  mtry            = m.rf$bestTune[[1]],
+importance      = 'permutation',
+keep.inbag = TRUE)  
+```
+<h4> Training and optimizing the Rhetoric RFPOPI (non-Western countries) </h4>
+```{r}
+set.seed(1)
+idx<-  as.vector(createDataPartition(select_RHET_noOECD$depvar, p = .7,list=FALSE , times = 1)) #This ensures balance in train test set by levels of populism and political ideology
+train<- select_RHET_noOECD[idx,]
+test<- select_RHET_noOECD[-idx,]
+ctrl <- trainControl(method = "LOOCV")
+
+# Train the Random Forest model with grid search
+m.rf <- train(
+  depvar ~ ., 
+  data=train, 
+  method="rf", 
+  metric="RMSE", 
+  tuneGrid=grid, 
+  ntree = 500,
+  trControl=ctrl)
+#Optimized model in ranger environment: allows for easy calculation of confidence intervals of estimates
+mod_fin_rhet_nooecd <- ranger(
+  depvar~., 
+  data            = train, 
+  num.trees       = 1000,
+  mtry            = m.rf$bestTune[[1]],
+importance      = 'permutation',
+keep.inbag = TRUE)  
+```
+
+<h4> Rhetoric RFPOPI predictions <h4>
+```{r}
+#Restricts set of variables
+subs1<-V_Dem2[,c("v2paid","country_name", "country_text_id","year",union(noquote(variables_rhet_OECD), noquote(variables_rhet_noOECD)))]
+
+#Selects Western countries
+subs1<-na.omit(subs1)
+subs1<-subs1%>%
+  filter(OECDEU27==1)
+#################################################################################
+#Predictions and confidence intervals (Western countries)
+#################################################################################
+predictions<-predict(mod_fin_rhet_oecd, subs1, type="se")
+subs1$populism_rhet<- predictions$predictions
+ERR_rhet_oecd<- predictions$se*1.96
+subs1$pop_rhet_err_L<-predictions$predictions-ERR_rhet_oecd
+subs1$pop_rhet_err_H<-predictions$predictions+ERR_rhet_oecd
+
+#################################################################################
+#Predictions and confidence intervals (Non-Western countries)
+#################################################################################
+subs2<-na.omit(subs2)
+subs2<-subs2%>%
+  filter(OECDEU27==0)#selects countries non west.
+
+predictions<-predict(mod_fin_rhet_nooecd, subs2, type="se")
+subs2$populism_rhet<- predictions$predictions
+ERR_rhet_nooecd<- predictions$se*1.96
+subs2$pop_rhet_err_L<-predictions$predictions-ERR_rhet_nooecd
+subs2$pop_rhet_err_H<-predictions$predictions+ERR_rhet_nooecd
+```
+
+

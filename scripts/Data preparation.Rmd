@@ -1,0 +1,117 @@
+---
+title: "Data preparation"
+output: html_notebook
+---
+```{r message=FALSE, warning=FALSE}
+#upload libraries
+packages<- c("tidyverse", "dplyr", "readr","haven")
+lapply(packages, require, character.only = TRUE)
+```
+
+Create RFPOPI ideational dataset: Incorporating Meijers-Zaslove data to V-Dem needs some steps. 
+This is not needed for RFPOPI rhetoric, as Norris index is already incorported within V-Dem
+```{r message=FALSE, warning=FALSE}
+#################################################################################
+# Upload and merge necessary datasets
+#################################################################################
+file_name <- "partyfacts-mapping.csv" # download parties mapping from PartyFacts
+if (!file_name %in% list.files()) {
+  url <- "https://partyfacts.herokuapp.com/download/external-parties-csv/"
+  download.file(url, file_name)
+}
+partyfacts_raw <- read_csv(file_name, guess_max = 50000)
+partyfacts <- partyfacts_raw %>% filter(!is.na(partyfacts_id))
+
+# link datasets (select only linked parties)
+dataset_1 <- partyfacts %>% filter(dataset_key == "manifesto")
+dataset_2 <- partyfacts %>% filter(dataset_key == "vparty")
+dataset_3 <- partyfacts %>% filter(dataset_key == "poppa")
+
+link_table <-
+  dataset_1 %>%
+  inner_join(dataset_2, by = c("partyfacts_id" = "partyfacts_id"))
+
+
+link_table1 <-
+  link_table %>%
+  inner_join(dataset_3, by = c("partyfacts_id" = "partyfacts_id"))
+# write results into file with dataset names in file name
+file_out <- "partyfacts-linked.csv"
+write_csv(link_table1, file_out)
+# END OF 1.
+#-------------------------------------------------------------------------------------#
+PF_link <- read.csv("partyfacts-linked.csv") # upload linking table
+PF_link <- PF_link[, c(3, 16, 20, 36)] # when running populism as rhetoric take out col nr 36
+PF_link <- na.omit(PF_link)
+# 2.
+#-------------------------------------------------------------------------------------#
+# Here I incorporate the PARTYFACTSID from the linking table in the CMP
+
+V_Dem2 <- read.csv("data/V-Dem-CPD-Party-V2.csv")
+VDEM2_PF <- merge(V_Dem2, PF_link, by.x = "v2paid", by.y = "dataset_party_id.y")
+
+# Import Meijers Zaslove survey and match it with PF link
+mej_zas <- read_dta("data/party_means.dta")
+mej_zas_PF <- merge(mej_zas, PF_link, by.x = "party_id", by.y = "dataset_party_id")
+# END OF 3.
+# 4.
+V_Dem2 <- V_Dem2[!V_Dem2$year < 2014, ] %>%
+  group_by(pf_party_id) %>%
+  arrange(desc(year)) %>%
+  dplyr::slice(1)
+mej_vdem <- merge(mej_zas_PF, V_Dem2, by.x = "partyfacts_id", by.y = "pf_party_id")
+
+file_out <- "data/mej_vdem.rds"
+saveRDS(mej_vdem, file_out)
+
+
+
+# Add V_dem an identifier for Western countries (OECD+EU) / non-Western countries 
+V_Dem2$OECDEU27 <- rep(0, nrow(V_Dem2))
+V_Dem2$OECDEU27[V_Dem2$country_name == "Austria"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Australia"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Belgium"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Bulgaria"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Canada"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Chile"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Colombia"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Costa Rica"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Czech Republic"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Denmark"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Estonia"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Finland"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "France"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Germany"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Greece"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Hungary"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Iceland"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Ireland"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Israel"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Italy"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Japan"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "South Korea"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Latvia"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Lithuania"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Luxembourg"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Malta"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Mexico"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Netherlands"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "New Zealand"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Norway"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Poland"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Portugal"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Romania"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Slovakia"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Slovenia"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Spain"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Sweden"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Switzerland"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "Turkey"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "United Kingdom"] <- 1
+V_Dem2$OECDEU27[V_Dem2$country_name == "United States of America"] <- 1
+
+file_out <- "data/V_Dem2.rds"
+saveRDS(V_Dem2, file_out)
+```
+
+

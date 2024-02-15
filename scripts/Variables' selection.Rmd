@@ -1,0 +1,341 @@
+---
+title: "RFPOPI - Variables selection"
+output: html_notebook
+---
+<h2> Variables selection for populism indexes</h2>
+<p>This notebook containes the variables' selection phase for the two RFPOPI indicators: Ideational RFPOPI; and Rhetoric RFPOPI. </p>
+<p> The rhetoric populism predictions are obtained by splitting the initial sample into two subgroups of countries (Western and Non-Western). For more details see the reference paper. </p>
+```{r message=FALSE, warning=FALSE}
+#Upload libraries
+packages<-c("tidyverse","dplyr", "caret", "Boruta","MASS", "glmnet")
+lapply(packages, require, character.only = TRUE)
+
+#upload datasets
+mej_vdem<-readRDS("data/mej_vdem.rds")
+V_Dem2<- readRDS("data/V_Dem2.rds")
+```
+<h2> Ideational populism </h2>
+1) Select political parties' identity and organization variables from V-Party dataset.
+```{r}
+#Define dependent variable: populism from Meijers-Zaslove
+mej_vdem$depvar <- mej_vdem$populism
+# Select the potential input variables.
+select <- mej_vdem %>%
+  dplyr::select(
+    depvar,
+    v2paanteli,
+    v2papeople,
+    v2paplur,
+    v2paind,
+    v2paopresp,
+    v2paimmig,
+    v2parelig,
+    v2palgbt,
+    v2paminor,
+    v2paculsup,
+    v2paviol,
+    v2pagender,
+    v2pawomlab,
+    v2pariglef,
+    v2pawelf,
+    v2paclient
+  )
+#Identify & drop NAs
+select <- na.omit(select)
+file_out<- "data/select_IDE.rds"
+saveRDS(select, file_out)
+```
+2) Train - test split
+```{r}
+# Split train-test before variable selection to avoid information leakage
+set.seed(1)
+idx <- as.vector(createDataPartition(select$depvar, p = .7, list = FALSE, times = 1)) # ensures balance in train test set by levels of populism
+train <- select[idx, ]
+test <- select[-idx, ]
+
+```
+3) Perform variables' selection algorithms
+```{r}
+# 1) Boruta selector
+set.seed(111)
+boruta <- Boruta(depvar ~ ., data = train, doTrace = 2, maxRuns = 500)
+boruta <- plot(boruta, las = 2, cex.axis = 0.7)
+boruta
+boruta_med <- as.data.frame(apply(as.data.frame(boruta$ImpHistory), 2, median))
+boruta_med$imp <- boruta_med$`apply(as.data.frame(boruta$ImpHistory), 2, median)`
+boruta_med <- boruta_med[order(-boruta_med$`apply(as.data.frame(boruta$ImpHistory), 2, median)`), , drop = FALSE]
+N <- 8
+boruta_list <- row.names(boruta_med[1:N, ]) # select first 8 features from Boruta
+
+# 2) LASSO selector
+X <- as.matrix(train[, -1])
+cv_lasso_fit <- cv.glmnet(x = X, y = train$depvar, alpha = 1, nfolds = 5) # Cross validation to get optimal lambda
+lasso_ide <- plot(cv_lasso_fit)
+opt_laambda <- cv_lasso_fit$lambda.min # selects optimal lambda
+best_mod <- glmnet(x = as.matrix(train[, -1]), y = train$depvar, alpha = 1, lambda = opt_laambda, nfolds = 5) # performs lasso with optimal lambda.
+coef <- as.data.frame(as.matrix(abs(coef(best_mod)))) # extracts coefficients
+
+ggplot(coef, aes(x = reorder(rownames(coef), coef[, 1]), y = coef[, 1], fill = coef[, 1])) + # plots LASSO coefficients
+  geom_bar(stat = "identity", position = "dodge") +
+  ylab("LASSO coefficients") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("") +
+  guides(fill = "none") +
+  scale_fill_gradient(low = "light blue", high = "blue") +
+  theme_bw()
+
+vars <- as.data.frame(as.matrix(coef(best_mod)))
+vars <- row.names(vars)[which(vars$s0 != 0)]
+vars <- vars[-1]
+
+# 3) Recursive feature elimination (RFE)
+set.seed(123)
+control <- rfeControl(functions = rfFuncs, method = "cv", number = 10, repeats = 3)
+rfe <- rfe(train[, 2:dim(train)[2]], train[, 1], rfeControl = control)
+print(rfe)
+plot(rfe, type = c("g", "o"), cex = 1.0)
+
+varimp_data <- data.frame(
+  feature = row.names(varImp(rfe))[1:8], # organize var. imp. results
+  importance = varImp(rfe)[1:8, 1]
+)
+
+ggplot( #plots var. imp from rfe
+  data = varimp_data,
+  aes(x = reorder(feature, -importance), y = importance, fill = feature)
+) +
+  geom_bar(stat = "identity") +
+  labs(x = "Features", y = "Variable Importance") +
+  geom_text(aes(label = round(importance, 2)), vjust = 1.6, color = "white", size = 4) +
+  theme_bw() +
+  theme(legend.position = "none")
+vars_rfe <- predictors(rfe)[1:6]
+
+# 4) Optimal subset: the intersection of the sets from the three V.S methods
+variables_IDE <- intersect(intersect(boruta_list, vars), vars_rfe)
+file_out<-("data/variables_IDE.rds")
+saveRDS(variables_IDE, file_out)
+```
+The variables selected for RFPOPI ideational are: 
+```{r}
+variables_IDE
+```
+
+<h2> Rethoric populism (Western countries)</h2>
+1) Select political parties' identity and organization variables from V-Party dataset.
+```{r}
+# Select the dependent variable
+V_Dem2$depvar <- V_Dem2$ep_v8_popul_rhetoric
+# Select the input variables and restrict to Western countries
+select <- V_Dem2 %>%
+  ungroup() %>%
+  dplyr::select(
+    depvar,
+    v2paanteli,
+    v2papeople,
+    v2paplur,
+    v2paind,
+    v2paopresp,
+    v2paimmig,
+    v2parelig,
+    v2palgbt,
+    v2paminor,
+    v2paculsup,
+    v2paviol,
+    v2pagender,
+    v2pawomlab,
+    v2pariglef,
+    v2paclient, OECDEU27
+  ) %>%
+  filter(OECDEU27 == 1) # SELECTS OECD COUNTRIES
+
+select <- na.omit(select) # drop NAs
+select <- as.data.frame(select[, -dim(select)[2]]) # drop country identifier
+file_out<-("data/select_RHET_OECD.rds")
+saveRDS(select, file_out)
+```
+2) Train - test split
+```{r}
+# Split train-test to avoid info leakage
+set.seed(1)
+idx <- as.vector(createDataPartition(select$depvar, p = .7, list = FALSE, times = 1)) # Ensures balance in train test set by levels of populism
+train <- select[idx, ]
+test <- select[-idx, ]
+```
+3) Perform variables' selection algorithms
+```{r}
+# Set seed
+set.seed(111)
+# 1) BORUTA
+boruta <- Boruta(depvar ~ ., data = train, doTrace = 2, maxRuns = 500)
+boruta_rhet_OECD <- plot(boruta, las = 2, cex.axis = 0.7)
+boruta_rhet_OECD
+boruta_med <- as.data.frame(apply(as.data.frame(boruta$ImpHistory), 2, median))
+boruta_med$imp <- boruta_med$`apply(as.data.frame(boruta$ImpHistory), 2, median)`
+boruta_med <- boruta_med[order(-boruta_med$`apply(as.data.frame(boruta$ImpHistory), 2, median)`), , drop = FALSE]
+N <- 9
+boruta_list <- row.names(boruta_med[1:N, ]) # select first 9 features
+
+# 2) LASSO
+X <- as.matrix(train[, -c(1)]) # input vars.
+cv_lasso_fit <- cv.glmnet(x = X, y = train$depvar, alpha = 1, nfolds = 5) # Cross validation to get optimal lambda
+plot(cv_lasso_fit)
+opt_laambda <- cv_lasso_fit$lambda.min # selects optimal lambda
+best_mod <- glmnet(x = as.matrix(X), y = train$depvar, alpha = 1, lambda = opt_laambda, nfolds = 5) # performs lasso with optimal lambda.
+coef <- as.data.frame(as.matrix(abs(coef(best_mod))))
+
+lasso_rhet <- ggplot(coef, aes(x = reorder(rownames(coef), coef[, 1]), y = coef[, 1], fill = coef[, 1])) + # plots lasso coefficients
+  geom_bar(stat = "identity", position = "dodge") +
+  ylab("LASSO coefficients") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("") +
+  guides(fill = "none") +
+  scale_fill_gradient(low = "light blue", high = "blue") +
+  theme_bw()
+
+lasso_rhet
+vars <- as.data.frame(as.matrix(coef(best_mod)))
+vars <- row.names(vars)[which(vars$s0 != 0)]
+vars <- vars[-1]
+
+# 3) Recursive feature elimination (RFE)
+control <- rfeControl(functions = rfFuncs, method = "cv", number = 10)
+rfe <- rfe(train[, 2:dim(train)[2]], train[, 1], rfeControl = control)
+print(rfe, top = 10)
+plot(rfe, type = c("g", "o"), cex = 1.0)
+varimp_data <- data.frame(
+  feature = row.names(varImp(rfe))[1:11],
+  importance = varImp(rfe)[1:11, 1]
+)
+ggplot(
+  data = varimp_data,
+  aes(x = reorder(feature, -importance), y = importance, fill = feature)
+) +
+  geom_bar(stat = "identity") +
+  labs(x = "Features", y = "Variable Importance") +
+  geom_text(aes(label = round(importance, 2)), vjust = 1.6, color = "white", size = 4) +
+  theme_bw() +
+  theme(legend.position = "none")
+vars_rfe <- predictors(rfe)[1:8]
+
+# 4) Optimal subset: the intersection of the sets from the three V.S methods
+variables_rhet_OECD <- intersect(intersect(boruta_list, vars), vars_rfe) # intersect variables from 2 methods
+file_out<-("data/variables_rhet_OECD.rds")
+saveRDS(variables_rhet_OECD, file_out)
+```
+The variables selected for RFPOPI rhetoric (Western countries) are: 
+```{r}
+variables_rhet_OECD
+```
+
+
+<h2> Rethoric populism (Non-Western countries)</h2>
+1) Select political parties' identity and organization variables from V-Party dataset.
+```{r}
+# Select the dependent variable
+V_Dem2$depvar <- V_Dem2$ep_v8_popul_rhetoric
+# Select the input variables and restrict to Western countries
+select <- V_Dem2 %>%
+  ungroup() %>%
+  dplyr::select(
+    depvar,
+    v2paanteli,
+    v2papeople,
+    v2paplur,
+    v2paind,
+    v2paopresp,
+    v2paimmig,
+    v2parelig,
+    v2palgbt,
+    v2paminor,
+    v2paculsup,
+    v2paviol,
+    v2pagender,
+    v2pawomlab,
+    v2pariglef,
+    v2paclient, OECDEU27
+  ) %>%
+  filter(OECDEU27 == 0) # SELECTS NON-OECD COUNTRIES
+
+select <- na.omit(select) # drop NAs
+select <- as.data.frame(select[, -dim(select)[2]]) # drop country identifier
+file_out<-("data/select_RHET_noOECD.rds")
+saveRDS(select, file_out)
+```
+2) Train - test split
+```{r}
+# Split train-test to avoid info leakage
+set.seed(1)
+idx <- as.vector(createDataPartition(select$depvar, p = .7, list = FALSE, times = 1)) # Ensures balance in train test set by levels of populism
+train <- select[idx, ]
+test <- select[-idx, ]
+```
+3) Perform variables' selection algorithms
+```{r}
+# Set seed
+set.seed(111)
+# 1) BORUTA
+boruta <- Boruta(depvar ~ ., data = train, doTrace = 2, maxRuns = 500)
+boruta_rhet_noOECD <- plot(boruta, las = 2, cex.axis = 0.7)
+boruta_rhet_noOECD
+boruta_med <- as.data.frame(apply(as.data.frame(boruta$ImpHistory), 2, median))
+boruta_med$imp <- boruta_med$`apply(as.data.frame(boruta$ImpHistory), 2, median)`
+boruta_med <- boruta_med[order(-boruta_med$`apply(as.data.frame(boruta$ImpHistory), 2, median)`), , drop = FALSE]
+N <- 9
+boruta_list <- row.names(boruta_med[1:N, ]) # select first 9 features
+
+# 2) LASSO
+X <- as.matrix(train[, -c(1)]) # input vars.
+cv_lasso_fit <- cv.glmnet(x = X, y = train$depvar, alpha = 1, nfolds = 5) # Cross validation to get optimal lambda
+plot(cv_lasso_fit)
+opt_laambda <- cv_lasso_fit$lambda.min # selects optimal lambda
+best_mod <- glmnet(x = as.matrix(X), y = train$depvar, alpha = 1, lambda = opt_laambda, nfolds = 5) # performs lasso with optimal lambda.
+coef <- as.data.frame(as.matrix(abs(coef(best_mod))))
+
+lasso_rhet <- ggplot(coef, aes(x = reorder(rownames(coef), coef[, 1]), y = coef[, 1], fill = coef[, 1])) + # plots lasso coefficients
+  geom_bar(stat = "identity", position = "dodge") +
+  ylab("LASSO coefficients") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("") +
+  guides(fill = "none") +
+  scale_fill_gradient(low = "light blue", high = "blue") +
+  theme_bw()
+
+lasso_rhet
+vars <- as.data.frame(as.matrix(coef(best_mod)))
+vars <- row.names(vars)[which(vars$s0 != 0)]
+vars <- vars[-1]
+
+# 3) Recursive feature elimination (RFE)
+control <- rfeControl(functions = rfFuncs, method = "cv", number = 10)
+rfe <- rfe(train[, 2:dim(train)[2]], train[, 1], rfeControl = control)
+print(rfe, top = 10)
+plot(rfe, type = c("g", "o"), cex = 1.0)
+varimp_data <- data.frame(
+  feature = row.names(varImp(rfe))[1:11],
+  importance = varImp(rfe)[1:11, 1]
+)
+ggplot(
+  data = varimp_data,
+  aes(x = reorder(feature, -importance), y = importance, fill = feature)
+) +
+  geom_bar(stat = "identity") +
+  labs(x = "Features", y = "Variable Importance") +
+  geom_text(aes(label = round(importance, 2)), vjust = 1.6, color = "white", size = 4) +
+  theme_bw() +
+  theme(legend.position = "none")
+vars_rfe <- predictors(rfe)[1:8]
+
+# 4) Optimal subset: the intersection of the sets from the three V.S methods
+variables_rhet_noOECD <- intersect(intersect(boruta_list, vars), vars_rfe) # intersect variables from 2 methods
+file_out<-("data/variables_rhet_noOECD.rds")
+saveRDS(variables_rhet_noOECD, file_out)
+```
+The variables selected for RFPOPI rhetoric (Western countries) are: 
+```{r}
+variables_rhet_noOECD
+```
+

@@ -1,0 +1,539 @@
+---
+title: "modelevaluation10012024"
+output:
+  html_document:
+    df_print: paged
+---
+<h1> Models evaluation - RESUME </h1> 
+<p>
+Instead of checking the statistical significance of the different models performances across different models on one train-test split (as suggested by R1), we study the behaviour of models over ten random train-test splits. 
+If a model is better than the others sistematically, it can be ruled out that is due to random chance. </p>
+
+<p>
+I find that the RF is the best model in 2 out of 3 of our models (RFPOPI_IDE and RFPOPI RHET non-oecd). 
+SVM_R performs on average better than RF over RFPOPI RHET OECD. One argument to justify the exclusive choice of RF could be to keep the paper meethodologically consistent. What do you think?</p> 
+
+<p> Also, despite the RF is the best model over the RFPOPI_RHET non OECD data, its performance is overall bad (R^2 around 0.2), thus we should take a decision here: 
+1. Take out this indicator from the paper and reduce the overall scope? 
+2. Make upfront this limitation? Although to me showing an R^2 around 0.2 sounds as a suicide mission. 
+3. Do nothing. We already mention that predicting populism in non-OECD countries is problematic. We could just leave it as it is.</p>
+
+```{r Libraries, message=FALSE, warning=FALSE}
+options(scipen = 100)
+#################################################################################
+#Packages upload
+#################################################################################
+packages<- c("tidyverse", "dplyr", "readr","haven","caret", "ggplot2", "ggExtra", "gridExtra","grid", "Boruta", "randomForest","MASS", "glmnet")
+lapply(packages, require, character.only = TRUE)
+
+#################################################################################
+#Datasets
+#################################################################################
+mej_vdem<-readRDS("data/mej_vdem.rds")
+V_Dem2<- readRDS("data/V_Dem2.rds")
+
+#################################################################################
+#Selected variables from Variables' selection.Rmd
+#################################################################################
+#Inputs:
+select_IDE<- readRDS("data/select_IDE.rds")
+select_RHET_OECD<- readRDS("data/select_RHET_OECD.rds")
+select_RHET_noOECD<- readRDS("data/select_RHET_noOECD.rds")
+variables_IDE<-readRDS("data/variables_IDE.rds")
+variables_rhet_OECD<-readRDS("data/variables_rhet_OECD.rds")
+variables_rhet_noOECD<-readRDS("data/variables_rhet_noOECD.rds")
+```
+
+<h1>Best model selection RFPOPI_IDE</h1>
+<p>
+Given the optimal variables selected, I run ten iterations of train-test split (70-30) and look at the RMSE produced in each iteration. 
+The table below returns the RMSE by method and iteration.
+The RF produces the lowest average RMSE across iterations. 
+While testing the statistical significance of the differences between a RF and another model can tell whether there is a difference on that specific train-test split, the performance found across 10 iterations suggests that the RF has a higher likelihood to perform better than the other methodologies when fed with unseen data. 
+</p>
+
+```{r}
+#Use a new seed and create a new train test split to evaluate what's the best procedure given the set of variables chosen# 
+#1 Construct a vector of 10 random seeds
+set.seed(1)
+rand_seed <- sample(1:100, 30, replace = F)
+#Create containers
+RMSE_OLS_TEST<-c()
+RMSE_RF_TEST<-c()
+RMSE_SVM_R_TEST<-c()
+RMSE_SVM_TEST<-c()
+RMSE_XGB_TEST<-c()
+for (i in seq_along(rand_seed)) {
+  set.seed(rand_seed[i])
+  
+  idx <- createDataPartition(select_IDE$depvar, p = 0.7, list = FALSE, times = 1)
+  train <- select_IDE[idx, ]
+  test <- select_IDE[-idx, ]
+  
+  train<- train%>%
+        ungroup()%>%
+        dplyr::select(depvar,variables_IDE)
+  test<-  test%>%
+        ungroup()%>%
+        dplyr::select(depvar,variables_IDE)
+  ctrl <- trainControl(method = "LOOCV")
+
+  
+  # OLS model
+  lm_model <- lm(depvar ~ ., data = train)
+  pred_ols_test <- predict(lm_model, newdata = test)
+  
+  # Calculate RMSE
+  rmse_ols_test <- sqrt(mean((pred_ols_test - test$depvar)^2))
+
+  # Save RMSE for this iteration
+  RMSE_OLS_TEST[i] <- rmse_ols_test
+
+#RF
+set.seed(8)
+# Define a grid of parameters to search
+grid <- expand.grid(
+  .mtry = c(2:ncol(train)-1))              # Number of variables randomly sampled as candidates at each split)
+
+# Train the Random Forest model with grid search
+rf <- train(
+  depvar ~ ., 
+  data=train, 
+  method="rf", 
+  metric="RMSE", 
+  tuneGrid=grid, 
+  ntree = 500,
+  trControl=ctrl)
+
+# Extract best model
+best_rf <- rf$bestTune
+
+# Use the best model to make predictions on the test set
+PRED_RF_TEST <- predict(rf, test)
+# Calculate RMSE
+rmse_rf_test <- sqrt(mean((PRED_RF_TEST - test$depvar)^2))
+  
+# Save RMSE for this iteration
+RMSE_RF_TEST[i] <- rmse_rf_test
+
+#3 SVM_L
+set.seed(8)
+svm_l<-train(depvar~., data=train, method="svmLinear", trControl=ctrl, preProcess=(c("center" , "scale")))
+PRED_SVM_TEST<-predict(svm_l, test)
+# Calculate RMSE
+rmse_SVM_test <- sqrt(mean((PRED_SVM_TEST - test$depvar)^2))
+# Save RMSE for this iteration
+RMSE_SVM_TEST[i] <- rmse_SVM_test
+
+#4 SVM_R
+set.seed(8)
+svm_r<-train(depvar~., data=train, method="svmRadial", trControl=ctrl, preProcess=(c("center" , "scale")))
+RMSE_SVM_R<- svm_r$results$RMSE
+PRED_SVM_R_TEST<-predict(svm_r, test)
+# Calculate RMSE
+rmse_SVM_R_test <- sqrt(mean((PRED_SVM_R_TEST - test$depvar)^2))
+# Save RMSE for this iteration
+RMSE_SVM_R_TEST[i] <- rmse_SVM_R_test
+
+#XGBoost
+set.seed(8)
+tune_grid <- expand.grid(nrounds = 200,
+                         max_depth = 5,
+                         eta = 0.05,
+                         gamma = 0.01,
+                         colsample_bytree = 0.75,
+                         min_child_weight = 0,
+                         subsample = 0.5)
+
+XGB <- train(depvar~., data = train, method = "xgbTree",
+                trControl=ctrl,
+                tuneGrid = tune_grid,
+                tuneLength = 10)
+
+RMSE_XGB<-XGB$results$RMSE
+
+
+PRED_XGB_TEST<-predict(XGB, test)
+# Calculate RMSE
+rmse_XGB_test <- sqrt(mean((PRED_XGB_TEST - test$depvar)^2))
+# Save RMSE for this iteration
+RMSE_XGB_TEST[i] <- rmse_XGB_test
+}
+
+#Random Forest Regression with mtry=4 is the best methodology
+tab<-data.frame(Iteration=1:10,
+                OLS=RMSE_OLS_TEST,
+                RF=RMSE_RF_TEST,
+                SVM_Lin=RMSE_SVM_TEST,
+                SVM_Rad=RMSE_SVM_R_TEST,
+                XGB=RMSE_XGB_TEST)
+#,                Err_SD= c(sd(SQ_ERR_OLS), sd(SQ_ERR_RF), sd(SQ_ERR_SVM), sd(SQ_ERR_SVM_R), sd(SQ_ERR_XGB))
+
+# Calculate mean values and add them as a new row
+mean_row <- c("Mean", mean(RMSE_OLS_TEST), mean(RMSE_RF_TEST), mean(RMSE_SVM_TEST), mean(RMSE_SVM_R_TEST), mean(RMSE_XGB_TEST))
+tab <- rbind(tab, mean_row)
+variance_row<-c("Variance",sd(RMSE_OLS_TEST), sd(RMSE_RF_TEST), sd(RMSE_SVM_TEST), sd(RMSE_SVM_R_TEST), sd(RMSE_XGB_TEST))
+tab0 <- rbind(tab, variance_row)
+tab0
+xtable(tab0, "latex")
+```
+
+```{r}
+#Create a dataset made of squared errors data of different methodologies in a long format to be fed in kuskall wallis
+errors<- data.frame(OLS=RMSE_OLS_TEST,RF=RMSE_RF_TEST,SVM=RMSE_SVM_TEST,SVM_R=RMSE_SVM_R_TEST, XGB=RMSE_XGB_TEST)
+errors_long<- gather(errors,model,value)
+
+#Implement kruskal-wallis pairwise test to identify which methodologies produce different errors
+pairwise.wilcox.test(errors_long$value, errors_long$model,p.adjust.method = "bonferroni", exact=T) #This can't handle ties
+
+#Here another version capable of handling ties 
+RF_OLS<-exactRankTests::wilcox.exact(errors$RF, errors$OLS)
+RF_SVM<-exactRankTests::wilcox.exact(errors$RF, errors$SVM)
+RF_SVM_R<-exactRankTests::wilcox.exact(errors$RF, errors$SVM_R)
+RF_XGB<-exactRankTests::wilcox.exact(errors$RF, errors$XGB)
+
+tab1<- data.frame(RF_OLS$p.value, RF_SVM$p.value,RF_SVM_R$p.value,RF_XGB$p.value)
+tab1
+xtable(tab1, "latex")
+
+```
+
+```{r}
+#Graphical representation 
+ggplot(test, aes(y=predict(rf,test), x= test$depvar)) +
+  geom_point() +
+  geom_abline(intercept=0, slope=1) +
+  geom_segment(aes(x = test$depvar, y=predict(rf,test), xend = test$depvar, yend = test$depvar),
+                  color = "blue") +
+  labs(y='Predicted Values', x='Actual Values', title='RF Performance - Ideational populism')+
+  xlim(0,10)+
+  ylim(0,10)
+```
+
+
+<h1>Best model selection RFPOPI_RHET OECD</h1>
+```{r}
+#Use a new seed and create a new train test split to evaluate what's the best procedure given the set of variables chosen# 
+#1 Construct a vector of 10 random seeds
+set.seed(1)
+rand_seed <- sample(1:100, 30, replace = F)
+#Create containers
+RMSE_OLS_TEST<-c()
+RMSE_RF_TEST<-c()
+RMSE_SVM_R_TEST<-c()
+RMSE_SVM_TEST<-c()
+RMSE_XGB_TEST<-c()
+for (i in seq_along(rand_seed)) {
+  set.seed(rand_seed[i])
+  
+  idx <- createDataPartition(select_RHET_OECD$depvar, p = 0.7, list = FALSE, times = 1)
+  train <- select_RHET_OECD[idx, ]
+  test <- select_RHET_OECD[-idx, ]
+  
+  train<- train%>%
+        ungroup()%>%
+        dplyr::select(depvar,variables_rhet_OECD)
+  test<-  test%>%
+        ungroup()%>%
+        dplyr::select(depvar,variables_rhet_OECD)
+  ctrl <- trainControl(method = "LOOCV")
+
+  
+  # OLS model
+  lm_model <- lm(depvar ~ ., data = train)
+  pred_ols_test <- predict(lm_model, newdata = test)
+  
+  # Calculate RMSE
+  rmse_ols_test <- sqrt(mean((pred_ols_test - test$depvar)^2))
+
+  # Save RMSE for this iteration
+  RMSE_OLS_TEST[i] <- rmse_ols_test
+
+#RF
+set.seed(8)
+# Define a grid of parameters to search
+grid <- expand.grid(
+  .mtry = c(2:ncol(train)-1))              # Number of variables randomly sampled as candidates at each split)
+
+# Train the Random Forest model with grid search
+rf <- train(
+  depvar ~ ., 
+  data=train, 
+  method="rf", 
+  metric="RMSE", 
+  tuneGrid=grid, 
+  ntree = 500,
+  trControl=ctrl)
+
+# Extract best model
+best_rf <- rf$bestTune
+
+# Use the best model to make predictions on the test set
+PRED_RF_TEST <- predict(rf, test)
+# Calculate RMSE
+rmse_rf_test <- sqrt(mean((PRED_RF_TEST - test$depvar)^2))
+  
+# Save RMSE for this iteration
+RMSE_RF_TEST[i] <- rmse_rf_test
+
+#3 SVM_L
+set.seed(8)
+svm_l<-train(depvar~., data=train, method="svmLinear", trControl=ctrl, preProcess=(c("center" , "scale")))
+PRED_SVM_TEST<-predict(svm_l, test)
+# Calculate RMSE
+rmse_SVM_test <- sqrt(mean((PRED_SVM_TEST - test$depvar)^2))
+# Save RMSE for this iteration
+RMSE_SVM_TEST[i] <- rmse_SVM_test
+
+#4 SVM_R
+set.seed(8)
+svm_r<-train(depvar~., data=train, method="svmRadial", trControl=ctrl, preProcess=(c("center" , "scale")))
+RMSE_SVM_R<- svm_r$results$RMSE
+PRED_SVM_R_TEST<-predict(svm_r, test)
+# Calculate RMSE
+rmse_SVM_R_test <- sqrt(mean((PRED_SVM_R_TEST - test$depvar)^2))
+# Save RMSE for this iteration
+RMSE_SVM_R_TEST[i] <- rmse_SVM_R_test
+
+#XGBoost
+set.seed(8)
+tune_grid <- expand.grid(nrounds = 200,
+                         max_depth = 5,
+                         eta = 0.05,
+                         gamma = 0.01,
+                         colsample_bytree = 0.75,
+                         min_child_weight = 0,
+                         subsample = 0.5)
+
+XGB <- train(depvar~., data = train, method = "xgbTree",
+                trControl=ctrl,
+                tuneGrid = tune_grid,
+                tuneLength = 10)
+
+RMSE_XGB<-XGB$results$RMSE
+
+
+PRED_XGB_TEST<-predict(XGB, test)
+# Calculate RMSE
+rmse_XGB_test <- sqrt(mean((PRED_XGB_TEST - test$depvar)^2))
+# Save RMSE for this iteration
+RMSE_XGB_TEST[i] <- rmse_XGB_test
+}
+
+#Random Forest Regression with mtry=4 is the best methodology
+tab<-data.frame(Iteration=1:10,
+                OLS=RMSE_OLS_TEST,
+                RF=RMSE_RF_TEST,
+                SVM_Lin=RMSE_SVM_TEST,
+                SVM_Rad=RMSE_SVM_R_TEST,
+                XGB=RMSE_XGB_TEST)
+#,                Err_SD= c(sd(SQ_ERR_OLS), sd(SQ_ERR_RF), sd(SQ_ERR_SVM), sd(SQ_ERR_SVM_R), sd(SQ_ERR_XGB))
+
+# Calculate mean values and add them as a new row
+mean_row <- c("Mean", mean(RMSE_OLS_TEST), mean(RMSE_RF_TEST), mean(RMSE_SVM_TEST), mean(RMSE_SVM_R_TEST), mean(RMSE_XGB_TEST))
+tab <- rbind(tab, mean_row)
+variance_row<-c("Variance",sd(RMSE_OLS_TEST), sd(RMSE_RF_TEST), sd(RMSE_SVM_TEST), sd(RMSE_SVM_R_TEST), sd(RMSE_XGB_TEST))
+tab2 <- rbind(tab, variance_row)
+tab2
+xtable(tab2, "latex")
+
+```
+
+```{r}
+#Create a dataset made of squared errors data of different methodologies in a long format to be fed in kuskall wallis
+errors<- data.frame(OLS=RMSE_OLS_TEST,RF=RMSE_RF_TEST,SVM=RMSE_SVM_TEST,SVM_R=RMSE_SVM_R_TEST, XGB=RMSE_XGB_TEST)
+errors_long<- gather(errors,model,value)
+
+#Implement kruskal-wallis pairwise test to identify which methodologies produce different errors
+pairwise.wilcox.test(errors_long$value, errors_long$model,p.adjust.method = "bonferroni", exact=T) #This can't handle ties
+
+#Here another version capable of handling ties 
+RF_OLS<-exactRankTests::wilcox.exact(errors$RF, errors$OLS)
+RF_SVM<-exactRankTests::wilcox.exact(errors$RF, errors$SVM)
+RF_SVM_R<-exactRankTests::wilcox.exact(errors$RF, errors$SVM_R)
+RF_XGB<-exactRankTests::wilcox.exact(errors$RF, errors$XGB)
+
+tab3<- data.frame(RF_OLS$p.value, RF_SVM$p.value,RF_SVM_R$p.value,RF_XGB$p.value)
+tab3
+xtable(tab3, "latex")
+
+```
+Now graphically compare the distribution of errors across the two best models.
+Here the difference in variances of prediction can be observed
+```{r}
+#Graphical representation 
+ggplot(test, aes(y=predict(rf,test), x= test$depvar)) +
+  geom_point() +
+  geom_abline(intercept=0, slope=1) +
+  geom_segment(aes(x = test$depvar, y=predict(rf,test), xend = test$depvar, yend = test$depvar),
+                  color = "blue") +
+  labs(y='Predicted Values', x='Actual Values', title='RF Performance - Rhetoric populism (OECD)')+
+  xlim(0,10)+
+  ylim(0,10)
+```
+<h2>  RFPOPI_RHET non-OECD countries</h2>
+
+
+<h1>Best model selection RFPOPI_RHET NON OECD</h1>
+```{r}
+#Use a new seed and create a new train test split to evaluate what's the best procedure given the set of variables chosen# 
+#1 Construct a vector of 10 random seeds
+set.seed(1)
+rand_seed <- sample(1:100, 30, replace = F)
+#Create containers
+RMSE_OLS_TEST<-c()
+RMSE_RF_TEST<-c()
+RMSE_SVM_R_TEST<-c()
+RMSE_SVM_TEST<-c()
+RMSE_XGB_TEST<-c()
+for (i in seq_along(rand_seed)) {
+  set.seed(rand_seed[i])
+  
+  idx <- createDataPartition(select_RHET_noOECD$depvar, p = 0.7, list = FALSE, times = 1)
+  train <- select_RHET_noOECD[idx, ]
+  test <- select_RHET_noOECD[-idx, ]
+  
+  train<- train%>%
+        ungroup()%>%
+        dplyr::select(depvar,variables_rhet_noOECD)
+  test<-  test%>%
+        ungroup()%>%
+        dplyr::select(depvar,variables_rhet_noOECD)
+  ctrl <- trainControl(method = "LOOCV")
+
+  
+  # OLS model
+  lm_model <- lm(depvar ~ ., data = train)
+  pred_ols_test <- predict(lm_model, newdata = test)
+  
+  # Calculate RMSE
+  rmse_ols_test <- sqrt(mean((pred_ols_test - test$depvar)^2))
+
+  # Save RMSE for this iteration
+  RMSE_OLS_TEST[i] <- rmse_ols_test
+
+#RF
+set.seed(8)
+# Define a grid of parameters to search
+grid <- expand.grid(
+  .mtry = c(2:ncol(train)-1))              # Number of variables randomly sampled as candidates at each split)
+
+# Train the Random Forest model with grid search
+rf <- train(
+  depvar ~ ., 
+  data=train, 
+  method="rf", 
+  metric="RMSE", 
+  tuneGrid=grid, 
+  ntree = 500,
+  trControl=ctrl)
+
+# Extract best model
+best_rf <- rf$bestTune
+
+# Use the best model to make predictions on the test set
+PRED_RF_TEST <- predict(rf, test)
+# Calculate RMSE
+rmse_rf_test <- sqrt(mean((PRED_RF_TEST - test$depvar)^2))
+  
+# Save RMSE for this iteration
+RMSE_RF_TEST[i] <- rmse_rf_test
+
+#3 SVM_L
+set.seed(8)
+svm_l<-train(depvar~., data=train, method="svmLinear", trControl=ctrl, preProcess=(c("center" , "scale")))
+PRED_SVM_TEST<-predict(svm_l, test)
+# Calculate RMSE
+rmse_SVM_test <- sqrt(mean((PRED_SVM_TEST - test$depvar)^2))
+# Save RMSE for this iteration
+RMSE_SVM_TEST[i] <- rmse_SVM_test
+
+#4 SVM_R
+set.seed(8)
+svm_r<-train(depvar~., data=train, method="svmRadial", trControl=ctrl, preProcess=(c("center" , "scale")))
+RMSE_SVM_R<- svm_r$results$RMSE
+PRED_SVM_R_TEST<-predict(svm_r, test)
+# Calculate RMSE
+rmse_SVM_R_test <- sqrt(mean((PRED_SVM_R_TEST - test$depvar)^2))
+# Save RMSE for this iteration
+RMSE_SVM_R_TEST[i] <- rmse_SVM_R_test
+
+#XGBoost
+set.seed(8)
+tune_grid <- expand.grid(nrounds = 200,
+                         max_depth = 5,
+                         eta = 0.05,
+                         gamma = 0.01,
+                         colsample_bytree = 0.75,
+                         min_child_weight = 0,
+                         subsample = 0.5)
+
+XGB <- train(depvar~., data = train, method = "xgbTree",
+                trControl=ctrl,
+                tuneGrid = tune_grid,
+                tuneLength = 10)
+
+RMSE_XGB<-XGB$results$RMSE
+
+
+PRED_XGB_TEST<-predict(XGB, test)
+# Calculate RMSE
+rmse_XGB_test <- sqrt(mean((PRED_XGB_TEST - test$depvar)^2))
+# Save RMSE for this iteration
+RMSE_XGB_TEST[i] <- rmse_XGB_test
+}
+
+#Random Forest Regression with mtry=4 is the best methodology
+tab<-data.frame(Iteration=1:10,
+                OLS=RMSE_OLS_TEST,
+                RF=RMSE_RF_TEST,
+                SVM_Lin=RMSE_SVM_TEST,
+                SVM_Rad=RMSE_SVM_R_TEST,
+                XGB=RMSE_XGB_TEST)
+#,                Err_SD= c(sd(SQ_ERR_OLS), sd(SQ_ERR_RF), sd(SQ_ERR_SVM), sd(SQ_ERR_SVM_R), sd(SQ_ERR_XGB))
+
+# Calculate mean values and add them as a new row
+mean_row <- c("Mean", mean(RMSE_OLS_TEST), mean(RMSE_RF_TEST), mean(RMSE_SVM_TEST), mean(RMSE_SVM_R_TEST), mean(RMSE_XGB_TEST))
+tab <- rbind(tab, mean_row)
+variance_row<-c("Variance",sd(RMSE_OLS_TEST), sd(RMSE_RF_TEST), sd(RMSE_SVM_TEST), sd(RMSE_SVM_R_TEST), sd(RMSE_XGB_TEST))
+tab4 <- rbind(tab, variance_row)
+tab4
+xtable(tab4, "latex")
+
+```
+
+
+```{r}
+#Create a dataset made of squared errors data of different methodologies in a long format to be fed in kuskall wallis
+errors<- data.frame(OLS=RMSE_OLS_TEST,RF=RMSE_RF_TEST,SVM=RMSE_SVM_TEST,SVM_R=RMSE_SVM_R_TEST, XGB=RMSE_XGB_TEST)
+errors_long<- gather(errors,model,value)
+
+#Implement kruskal-wallis pairwise test to identify which methodologies produce different errors
+pairwise.wilcox.test(errors_long$value, errors_long$model,p.adjust.method = "bonferroni", exact=T) #This can't handle ties
+
+#Here another version capable of handling ties 
+RF_OLS<-exactRankTests::wilcox.exact(errors$RF, errors$OLS)
+RF_SVM<-exactRankTests::wilcox.exact(errors$RF, errors$SVM)
+RF_SVM_R<-exactRankTests::wilcox.exact(errors$RF, errors$SVM_R)
+RF_XGB<-exactRankTests::wilcox.exact(errors$RF, errors$XGB)
+
+tab5<- data.frame(RF_OLS$p.value, RF_SVM$p.value,RF_SVM_R$p.value,RF_XGB$p.value)
+tab5
+
+xtable(tab5, "latex")
+```
+Now graphically compare the distribution of errors across the two best models.
+Here the difference in variances of prediction can be observed
+```{r}
+#Graphical representation 
+ggplot(test, aes(y=predict(rf,test), x= test$depvar)) +
+  geom_point() +
+  geom_abline(intercept=0, slope=1) +
+  geom_segment(aes(x = test$depvar, y=predict(rf,test), xend = test$depvar, yend = test$depvar),
+                  color = "blue") +
+  labs(y='Predicted Values', x='Actual Values', title='RF Performance - Rhetoric populism (non-OECD)')+
+  xlim(0,10)+
+  ylim(0,10)
+```
+
+
