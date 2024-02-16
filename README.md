@@ -11,8 +11,7 @@ Disclaimer: This repository is a "work in progress" and is not meant to be a rep
 An RShiny app is available to have a preliminary visualization of the data contained in the dataset. [Link to the app](https://acelico.shinyapps.io/rfpopi_app/)
 
 ## Data download 
-The dataset containing the ideational and rhetoric indicators of populism can be downloaded [here](https://github.com/acelico/RFPOPI-Populism-indicators/raw/main/data/RFPOPI%20final%20dataset.csv)
-
+The dataset containing the ideational and rhetoric indicators of populism can be downloaded [here](https://github.com/acelico/RFPOPI-Populism-indicators/raw/main/data/RFPOPI%20final%20dataset.rar)
 ## Dataset codebook 
 The codebook is currently WIP. For informations, contact the authors. 
 
