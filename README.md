@@ -7,7 +7,7 @@ The diffusion and the use of the data contained in this repository is allowed fo
 
 Disclaimer: This repository is a "work in progress" and is not meant to be a replication package for the results contained in the paper. 
 
-## Data preview
+## Data preview app
 An RShiny app is available to have a preliminary visualization of the data contained in the dataset. [Link to the app](https://acelico.shinyapps.io/rfpopi_app/)
 
 ## Data download 
